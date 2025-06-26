@@ -1,0 +1,79 @@
+system:
+  name: "Aditya-CME-Detector"
+  version: "1.0.0"
+  environment: "development"
+  debug: true
+
+data_sources:
+  swis:
+    endpoint: "https://api.aditya-l1.isro.gov.in/swis/aspex"
+    update_interval: 30  # seconds
+    timeout: 10
+    retry_attempts: 3
+    
+  cactus:
+    endpoint: "https://wwwbis.sidc.be/cactus/catalog/LASCO"
+    update_interval: 3600  # seconds (1 hour)
+    timeout: 30
+    retry_attempts: 3
+
+detection:
+  thresholds:
+    velocity_threshold: 500  # km/s
+    flux_threshold: 1200    # particles/cm²/s
+    confidence_threshold: 0.7
+    temperature_threshold: 200000  # K
+    magnetic_field_threshold: 10   # nT
+    time_window: 300  # seconds
+    
+  features:
+    moving_average_windows: [5, 10, 30, 60]  # minutes
+    gradient_windows: [1, 5, 15]  # minutes
+    statistical_windows: [60, 180, 360]  # minutes
+    
+  model:
+    type: "ensemble"
+    algorithms: ["isolation_forest", "svm", "random_forest"]
+    retrain_interval: 86400  # seconds (24 hours)
+
+alerts:
+  email:
+    enabled: true
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    
+  sms:
+    enabled: true
+    provider: "twilio"
+    
+  webhook:
+    enabled: false
+    url: ""
+    
+  severity_levels:
+    low: 0.6
+    medium: 0.7
+    high: 0.8
+    critical: 0.9
+
+database:
+  url: "postgresql://user:password@localhost:5432/cme_detector"
+  pool_size: 10
+  max_overflow: 20
+  
+redis:
+  url: "redis://localhost:6379/0"
+  
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  
+dashboard:
+  host: "0.0.0.0"
+  port: 8501
+  
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/cme_detector.log"

@@ -1,0 +1,135 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: cme_detector
+      POSTGRES_USER: cme_user
+      POSTGRES_PASSWORD: cme_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cme_user -d cme_detector"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Main API Service
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://cme_user:cme_password@postgres:5432/cme_detector
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "src.api.main"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Streamlit Dashboard
+  dashboard:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - DATABASE_URL=postgresql://cme_user:cme_password@postgres:5432/cme_detector
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      api:
+        condition: service_healthy
+    command: ["streamlit", "run", "src/dashboard/streamlit_app.py", "--server.address", "0.0.0.0"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Data Ingestion Worker
+  ingestion-worker:
+    build: .
+    environment:
+      - DATABASE_URL=postgresql://cme_user:cme_password@postgres:5432/cme_detector
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-c", "import asyncio; from src.data_ingestion.swis_ingestion import SWISIngestion; from src.data_ingestion.cactus_ingestion import CACTUSIngestion; asyncio.run(main())"]
+    restart: unless-stopped
+
+  # Celery Worker for Background Tasks
+  celery-worker:
+    build: .
+    environment:
+      - DATABASE_URL=postgresql://cme_user:cme_password@postgres:5432/cme_detector
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./models:/app/models
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "src.tasks.celery_app", "worker", "--loglevel=info"]
+    restart: unless-stopped
+
+  # Celery Beat Scheduler
+  celery-beat:
+    build: .
+    environment:
+      - DATABASE_URL=postgresql://cme_user:cme_password@postgres:5432/cme_detector
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "src.tasks.celery_app", "beat", "--loglevel=info"]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: cme-detector-network
